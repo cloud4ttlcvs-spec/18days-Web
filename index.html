@@ -637,10 +637,15 @@ body.light-theme header .chip-button.chip-button--active {
       padding: 4px 6px 8px;
       font-size: 11px;
       display: grid;
-      /* Expand the rightmost column to provide sufficient space for the action icons.
-         Previously the third column was 110px which caused large icons to be clipped on mobile devices.
-         Increase to 150px so that navigation/notification/map icons remain fully visible. */
-      grid-template-columns: minmax(0, 1fr) 80px 150px;
+      /*
+         Use flexible column widths to adapt to varying device widths.
+         - The first column grows to fill available space for the store name and meta info.
+         - The middle column (sales/metrics) has a reasonable minimum width but can grow on larger screens.
+         - The right column (action icons) uses clamp() to provide a wider range, ensuring icons never clip
+           on narrow devices while avoiding excessive wasted space on large screens.
+         This improves responsiveness across phones with very narrow or wide screens.
+       */
+      grid-template-columns: minmax(0, 1fr) minmax(70px, 100px) clamp(120px, 22vw, 170px);
       column-gap: 4px;
       align-items: stretch;
       cursor: pointer;
@@ -699,7 +704,12 @@ body.light-theme header .chip-button.chip-button--active {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      font-size: 14px; /* 門市列表名稱再大一點 */
+      /*
+       * Increase the store name font size by roughly 10% over the original 14px. 16px provides
+       * improved readability while keeping the overall card height stable.  The ellipsis
+       * ensures long names do not wrap or push elements to the next line.
+       */
+      font-size: 16px;
     }
 
     .store-done-tag {
@@ -2240,6 +2250,12 @@ body.light-theme header .chip-button.chip-button--active {
 
     .store-table .col-name {
       max-width: 170px;
+      /*
+       * Increase store name font size to 14px (about 10% larger than the typical 12px)
+       * for improved legibility in the full table view.  The max-width prevents names from
+       * stretching the table and the cell will still truncate with ellipsis if needed.
+       */
+      font-size: 14px;
     }
 
     .store-table .col-sales,
@@ -2681,7 +2697,8 @@ body.light-theme header .chip-button.chip-button--active {
             />
             <select id="sort-select" class="select-input">
               <option value="severity">按異常程度</option>
-              <option value="weeklySales">按周銷量</option>
+              <!-- Set weeklySales as the default selected sort so that the list is sorted by sales first. -->
+              <option value="weeklySales" selected>按周銷量</option>
               <option value="distance">按距離</option>
               <option value="storeId">按店號</option>
       <option value="priority">按優先度</option>
@@ -3381,7 +3398,9 @@ async function loadStoresFromSheet() {
     let stores = [];
     let activeStoreId = null;
     let activeFilter = "all";
-    let activeSort = "severity";
+// default sorting: use weekly sales first. When sales are equal,
+// a secondary sort on weekly growth rate will be applied in renderStoreList().
+let activeSort = "weeklySales";
     let activeTab = "hotspots";
     let map;
     let markers = {};
@@ -3969,6 +3988,9 @@ async function initializeData() {
       const sortSelect = document.getElementById("sort-select");
       const filterChips = document.querySelectorAll(".filter-chip[data-filter]");
 
+      // Set the sort select to the current active sort (default weeklySales) on initial load.
+      sortSelect.value = activeSort;
+
       searchInput.addEventListener("input", () => {
         renderStoreList();
       });
@@ -3976,6 +3998,8 @@ async function initializeData() {
       sortSelect.addEventListener("change", e => {
         activeSort = e.target.value;
         renderStoreList();
+        // After changing sort, scroll the page to the top so the user sees the start of the updated list.
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       });
 
       filterChips.forEach(chip => {
@@ -4053,7 +4077,12 @@ async function initializeData() {
           if (daysB !== daysA) return daysB - daysA;
           return b.Weekly_Sales - a.Weekly_Sales;
         } else if (activeSort === "weeklySales") {
-          return b.Weekly_Sales - a.Weekly_Sales;
+          // Primary sort by weekly sales (descending). When sales are equal,
+          // sort by weekly growth rate (descending) so that stores with
+          // higher growth appear higher in the list.
+          const salesDiff = (b.Weekly_Sales || 0) - (a.Weekly_Sales || 0);
+          if (salesDiff !== 0) return salesDiff;
+          return (b.Weekly_Growth_Rate || 0) - (a.Weekly_Growth_Rate || 0);
         } else if (activeSort === "distance") {
           const da = a.Distance_From_User ?? Infinity;
           const db = b.Distance_From_User ?? Infinity;
@@ -5712,9 +5741,11 @@ const baseBtn = document.getElementById("base-toggle-button");
       ];
       const regionMap = {};
       stores.forEach(s => {
-        const region = s.Region || '';
-        // Use normalized region names (replace '台' with '臺' for sorting) when grouping
-        const normalized = region.replace('台', '臺');
+        let region = s.Region || '';
+        // Normalize region names: replace '台' with '臺', then trim whitespace to avoid grouping issues
+        // from inconsistent spacing or special characters.
+        region = region.replace('台', '臺').trim();
+        const normalized = region;
         const growthValue = s.Weekly_Sales * s.Weekly_Growth_Rate;
         if (!regionMap[normalized]) {
           regionMap[normalized] = { sales: 0, growth: 0 };
